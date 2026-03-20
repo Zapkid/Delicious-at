@@ -27,11 +27,30 @@ function redirectWithCookies(
 }
 
 export default async function proxy(request: NextRequest): Promise<NextResponse> {
+  const supabaseUrl: string | undefined = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const supabaseAnonKey: string | undefined =
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+  if (
+    supabaseUrl === undefined ||
+    supabaseUrl === "" ||
+    supabaseAnonKey === undefined ||
+    supabaseAnonKey === ""
+  ) {
+    console.error(
+      "[tastey] Missing NEXT_PUBLIC_SUPABASE_URL or NEXT_PUBLIC_SUPABASE_ANON_KEY. Add them in the host (e.g. Vercel → Settings → Environment Variables) for Production and Preview, then redeploy."
+    );
+    return new NextResponse(
+      "Server misconfiguration: set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY on your host, then redeploy.",
+      { status: 503, headers: { "content-type": "text/plain; charset=utf-8" } }
+    );
+  }
+
   const response: NextResponse = intlMiddleware(request);
 
   const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    supabaseUrl,
+    supabaseAnonKey,
     {
       cookies: {
         getAll(): { name: string; value: string }[] {

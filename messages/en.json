@@ -225,7 +225,10 @@
       "cash": "Cash",
       "other": "Other",
       "saving": "Saving...",
-      "save": "Save"
+      "save": "Save",
+      "saveFailed": "Could not save. Please try again.",
+      "saveFirstForImages": "Save your shop details once (shop name required) to enable photo uploads.",
+      "uploadFailed": "Image upload failed. If this persists, confirm the storage bucket exists and is public."
     },
     "items": {
       "title": "My Items",

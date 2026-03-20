@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getManagerSession } from "@/lib/admin/manager-session";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { writeAdminAuditLog } from "@/lib/admin/audit-log";
+import { ensureShopForApprovedSeller } from "@/lib/admin/ensure-shop-for-approved-seller";
 
 interface RouteParams {
   params: Promise<{ id: string }>;
@@ -76,7 +77,7 @@ export async function PATCH(
 
   const { data: existing, error: fetchError } = await admin
     .from("seller_applications")
-    .select("id, user_id, status")
+    .select("id, user_id, status, business_name, address, bio")
     .eq("id", id)
     .maybeSingle();
 
@@ -102,10 +103,38 @@ export async function PATCH(
   }
 
   if (status === "approved") {
+    const row: {
+      user_id: string;
+      business_name: string;
+      address: string;
+      bio: string | null;
+    } = existing as {
+      user_id: string;
+      business_name: string;
+      address: string;
+      bio: string | null;
+    };
+
     await admin
       .from("profiles")
       .update({ is_seller_approved: true })
-      .eq("id", existing.user_id);
+      .eq("id", row.user_id);
+
+    const { error: shopErr } = await ensureShopForApprovedSeller(
+      admin,
+      row.user_id,
+      {
+        business_name: row.business_name,
+        address: row.address,
+        bio: row.bio,
+      }
+    );
+    if (shopErr) {
+      console.error(
+        "[admin] ensureShopForApprovedSeller failed:",
+        shopErr.message
+      );
+    }
   }
 
   await writeAdminAuditLog({

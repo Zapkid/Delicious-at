@@ -54,6 +54,8 @@ export default function SellerShopPage(): React.ReactElement {
     cash: false,
     other: false,
   });
+  const [saveFailed, setSaveFailed] = useState<boolean>(false);
+  const [uploadFailed, setUploadFailed] = useState<boolean>(false);
 
   const fetchShop = useCallback(async (): Promise<void> => {
     if (!user) {
@@ -61,19 +63,24 @@ export default function SellerShopPage(): React.ReactElement {
       return;
     }
 
-    try {
-      const { data: shopRow } = await supabase
-        .from("shops")
-        .select("*")
-        .eq("seller_id", user.id)
-        .single();
+    setShop(null);
+    setCoverPhotoUrl(null);
+    setProfilePhotoUrl(null);
 
-      const shopData = shopRow as Shop | null;
-      if (!shopData) {
-        setLoading(false);
-        return;
-      }
+    const { data: shopRow, error: shopError } = await supabase
+      .from("shops")
+      .select("*")
+      .eq("seller_id", user.id)
+      .maybeSingle();
 
+    if (shopError) {
+      console.error("[seller shop] load shop:", shopError.message);
+      setLoading(false);
+      return;
+    }
+
+    const shopData: Shop | null = shopRow as Shop | null;
+    if (shopData) {
       setShop(shopData);
       setName(shopData.name);
       setTagline(shopData.tagline ?? "");
@@ -103,11 +110,40 @@ export default function SellerShopPage(): React.ReactElement {
         }
       );
       setPaymentMethods(methodMap);
-    } catch {
-      // No shop data available
-    } finally {
-      setLoading(false);
+    } else {
+      setName("");
+      setTagline("");
+      setDescription("");
+      setSupportsDelivery(false);
+      setDeliveryRadiusKm("");
+      setDeliveryEstMinutes("");
+      setDeliveryFee("");
+      setDeliveryNotes("");
+      setPaymentMethods({
+        bit: false,
+        paybox: false,
+        cash: false,
+        other: false,
+      });
+
+      const { data: appRow } = await supabase
+        .from("seller_applications")
+        .select("business_name, bio")
+        .eq("user_id", user.id)
+        .eq("status", "approved")
+        .order("reviewed_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      const app: { business_name: string; bio: string | null } | null =
+        appRow as { business_name: string; bio: string | null } | null;
+      if (app) {
+        setName(app.business_name);
+        setDescription(app.bio ?? "");
+      }
     }
+
+    setLoading(false);
   }, [user, supabase]);
 
   useEffect(() => {
@@ -124,6 +160,7 @@ export default function SellerShopPage(): React.ReactElement {
     const column = type === "cover" ? "cover_photo_url" : "profile_photo_url";
 
     setUploading(true);
+    setUploadFailed(false);
     const ext: string = file.name.split(".").pop() ?? "jpg";
     const path: string = `shops/${shop.id}/${type}.${ext}`;
 
@@ -131,49 +168,109 @@ export default function SellerShopPage(): React.ReactElement {
       .from("shop-images")
       .upload(path, file, { upsert: true });
 
-    if (!uploadError) {
-      const { data: urlData } = supabase.storage
-        .from("shop-images")
-        .getPublicUrl(path);
-
-      const publicUrl: string = urlData.publicUrl;
-      await supabase
-        .from("shops")
-        .update({ [column]: publicUrl } as never)
-        .eq("id", shop.id);
-
-      setUrl(publicUrl);
+    if (uploadError) {
+      console.error("[seller shop] storage upload:", uploadError.message);
+      setUploadFailed(true);
+      setUploading(false);
+      return;
     }
+
+    const { data: urlData } = supabase.storage
+      .from("shop-images")
+      .getPublicUrl(path);
+
+    const publicUrl: string = urlData.publicUrl;
+    const { error: dbError } = await supabase
+      .from("shops")
+      .update({ [column]: publicUrl } as never)
+      .eq("id", shop.id);
+
+    if (dbError) {
+      console.error("[seller shop] save image url:", dbError.message);
+      setUploadFailed(true);
+      setUploading(false);
+      return;
+    }
+
+    setUrl(publicUrl);
     setUploading(false);
   }
 
   async function handleSave(): Promise<void> {
-    if (!shop) return;
-    setSaving(true);
+    if (!user) return;
+    const trimmedName: string = name.trim();
+    if (!trimmedName) return;
 
-    await supabase
-      .from("shops")
-      .update({
-        name,
-        tagline: tagline || null,
-        description: description || null,
-        supports_delivery: supportsDelivery,
-        delivery_radius_km: supportsDelivery
-          ? Number(deliveryRadiusKm) || null
-          : null,
-        delivery_est_minutes: supportsDelivery
-          ? Number(deliveryEstMinutes) || null
-          : null,
-        delivery_fee: supportsDelivery ? Number(deliveryFee) || 0 : 0,
-        delivery_notes: supportsDelivery ? deliveryNotes || null : null,
-      } as never)
-      .eq("id", shop.id);
+    setSaving(true);
+    setSaveFailed(false);
+
+    let shopId: string;
+
+    if (shop === null) {
+      const { data: inserted, error: insertError } = await supabase
+        .from("shops")
+        .insert({
+          seller_id: user.id,
+          name: trimmedName,
+          tagline: tagline || null,
+          description: description || null,
+          supports_delivery: supportsDelivery,
+          delivery_radius_km: supportsDelivery
+            ? Number(deliveryRadiusKm) || null
+            : null,
+          delivery_est_minutes: supportsDelivery
+            ? Number(deliveryEstMinutes) || null
+            : null,
+          delivery_fee: supportsDelivery ? Number(deliveryFee) || 0 : 0,
+          delivery_notes: supportsDelivery ? deliveryNotes || null : null,
+        } as never)
+        .select("*")
+        .single();
+
+      if (insertError || !inserted) {
+        console.error("[seller shop] insert shop:", insertError?.message);
+        setSaveFailed(true);
+        setSaving(false);
+        return;
+      }
+
+      const created: Shop = inserted as Shop;
+      setShop(created);
+      shopId = created.id;
+    } else {
+      const { error: updateError } = await supabase
+        .from("shops")
+        .update({
+          name: trimmedName,
+          tagline: tagline || null,
+          description: description || null,
+          supports_delivery: supportsDelivery,
+          delivery_radius_km: supportsDelivery
+            ? Number(deliveryRadiusKm) || null
+            : null,
+          delivery_est_minutes: supportsDelivery
+            ? Number(deliveryEstMinutes) || null
+            : null,
+          delivery_fee: supportsDelivery ? Number(deliveryFee) || 0 : 0,
+          delivery_notes: supportsDelivery ? deliveryNotes || null : null,
+        } as never)
+        .eq("id", shop.id);
+
+      if (updateError) {
+        console.error("[seller shop] update shop:", updateError.message);
+        setSaveFailed(true);
+        setSaving(false);
+        return;
+      }
+
+      shopId = shop.id;
+    }
 
     for (const method of PAYMENT_METHODS) {
       const { data: existingRow } = await supabase
         .from("seller_payment_methods")
         .select("id")
-        .eq("shop_id", shop.id)
+        .eq("shop_id", shopId)
         .eq("method", method)
         .maybeSingle();
 
@@ -187,7 +284,7 @@ export default function SellerShopPage(): React.ReactElement {
       } else if (paymentMethods[method]) {
         await supabase
           .from("seller_payment_methods")
-          .insert({ shop_id: shop.id, method, is_enabled: true } as never);
+          .insert({ shop_id: shopId, method, is_enabled: true } as never);
       }
     }
 
@@ -256,6 +353,16 @@ export default function SellerShopPage(): React.ReactElement {
             <CardTitle>{t("shopImages")}</CardTitle>
           </CardHeader>
           <CardContent className="space-y-6">
+            {!shop ? (
+              <p className="text-sm text-muted-foreground">
+                {t("saveFirstForImages")}
+              </p>
+            ) : null}
+            {uploadFailed ? (
+              <p className="text-sm text-destructive" role="alert">
+                {t("uploadFailed")}
+              </p>
+            ) : null}
             <div className="space-y-2">
               <Label>{t("coverPhoto")}</Label>
               <input
@@ -281,7 +388,7 @@ export default function SellerShopPage(): React.ReactElement {
                     size="sm"
                     variant="secondary"
                     className="absolute bottom-2 end-2"
-                    disabled={uploadingCover}
+                    disabled={uploadingCover || shop === null}
                     onClick={() => coverInputRef.current?.click()}
                   >
                     {uploadingCover ? t("saving") : t("changeImage")}
@@ -290,9 +397,9 @@ export default function SellerShopPage(): React.ReactElement {
               ) : (
                 <button
                   type="button"
-                  disabled={uploadingCover}
+                  disabled={uploadingCover || shop === null}
                   onClick={() => coverInputRef.current?.click()}
-                  className="flex h-40 w-full items-center justify-center rounded-lg border-2 border-dashed border-border transition-colors hover:border-primary hover:bg-muted/30"
+                  className="flex h-40 w-full items-center justify-center rounded-lg border-2 border-dashed border-border transition-colors hover:border-primary hover:bg-muted/30 disabled:pointer-events-none disabled:opacity-50"
                 >
                   <div className="flex flex-col items-center gap-2 text-muted-foreground">
                     <ImagePlus className="h-8 w-8" />
@@ -333,7 +440,7 @@ export default function SellerShopPage(): React.ReactElement {
                   type="button"
                   size="sm"
                   variant="outline"
-                  disabled={uploadingProfile}
+                  disabled={uploadingProfile || shop === null}
                   onClick={() => profileInputRef.current?.click()}
                 >
                   {uploadingProfile
@@ -437,8 +544,14 @@ export default function SellerShopPage(): React.ReactElement {
           </CardContent>
         </Card>
 
+        {saveFailed ? (
+          <p className="text-sm text-destructive" role="alert">
+            {t("saveFailed")}
+          </p>
+        ) : null}
+
         <Button
-          onClick={handleSave}
+          onClick={() => void handleSave()}
           disabled={saving || !name.trim()}
           className="w-full sm:w-auto sm:self-end"
         >

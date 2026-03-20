@@ -3,6 +3,7 @@ import { z } from "zod";
 import { getManagerSession } from "@/lib/admin/manager-session";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { writeAdminAuditLog } from "@/lib/admin/audit-log";
+import { ensureShopForApprovedSeller } from "@/lib/admin/ensure-shop-for-approved-seller";
 
 const bulkSchema = z.object({
   ids: z.array(z.string().uuid()).min(1).max(50),
@@ -37,13 +38,23 @@ export async function POST(request: Request): Promise<NextResponse> {
   for (const id of parsed.data.ids) {
     const { data: existing, error: fetchError } = await admin
       .from("seller_applications")
-      .select("id, user_id, status")
+      .select("id, user_id, status, business_name, address, bio")
       .eq("id", id)
       .maybeSingle();
 
     if (fetchError || !existing) continue;
 
-    const row: { user_id: string } = existing as { user_id: string };
+    const row: {
+      user_id: string;
+      business_name: string;
+      address: string;
+      bio: string | null;
+    } = existing as {
+      user_id: string;
+      business_name: string;
+      address: string;
+      bio: string | null;
+    };
 
     await admin
       .from("seller_applications")
@@ -59,6 +70,22 @@ export async function POST(request: Request): Promise<NextResponse> {
         .from("profiles")
         .update({ is_seller_approved: true } as never)
         .eq("id", row.user_id);
+
+      const { error: shopErr } = await ensureShopForApprovedSeller(
+        admin,
+        row.user_id,
+        {
+          business_name: row.business_name,
+          address: row.address,
+          bio: row.bio,
+        }
+      );
+      if (shopErr) {
+        console.error(
+          "[admin] ensureShopForApprovedSeller failed:",
+          shopErr.message
+        );
+      }
     }
   }
 
