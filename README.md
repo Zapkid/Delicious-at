@@ -1,4 +1,10 @@
+# Intro
+
 This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+
+## Supabase
+
+Database migrations and local stack: see [docs/supabase-cli.md](./docs/supabase-cli.md).
 
 ## Getting Started
 

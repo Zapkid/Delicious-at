@@ -1,0 +1,2 @@
+-- Runs after migrations when you `npm run db:reset`.
+-- Add INSERTs or call scripts here for local dev data.
